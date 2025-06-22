@@ -1,0 +1,220 @@
+#include <windows.h>
+#include <objidl.h>
+#include <gdiplus.h>
+#include <commctrl.h>
+#pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "comctl32.lib")
+
+using namespace Gdiplus;
+
+#define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
+#define GET_Y_LPARAM(lp) ((int)(short)HIWORD(lp))
+
+ULONG_PTR gdiplusToken;
+GdiplusStartupInput gdiplusStartupInput;
+
+// Состояние топора
+struct {
+    bool isInInventory = false;    // В инвентаре ли топор
+    bool isHovered = false;        // Наведен ли курсор
+    const Rect originalPos{ 1275, 525, 70, 70 };  // исходное место топора
+    Rect inventoryPos{ 50, 50, 100, 100 };        // Позиция в инвентаре
+} toporState;
+
+// ID для меню
+#define IDM_DROP 1001
+
+// Прототипы функций
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
+bool IsCursorInRect(int x, int y, const Rect& rect);
+void ShowContextMenu(HWND hWnd, POINT pt);
+
+int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
+    _In_ LPWSTR lpCmdLine, _In_ int nCmdShow)
+{
+    GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr);
+    InitCommonControls();
+
+    WNDCLASSEXW wcex = { sizeof(WNDCLASSEX) };
+    wcex.lpfnWndProc = WndProc;
+    wcex.hInstance = hInstance;
+    wcex.lpszClassName = L"GdiplusExample";
+    RegisterClassExW(&wcex);
+
+    HWND hWnd = CreateWindowW(L"GdiplusExample", L"GDI+ Example", WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, 0, 1920, 1080, nullptr, nullptr, hInstance, nullptr);
+
+    ShowWindow(hWnd, nCmdShow);
+    UpdateWindow(hWnd);
+
+    MSG msg;
+    while (GetMessage(&msg, nullptr, 0, 0))
+    {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    GdiplusShutdown(gdiplusToken);
+    return (int)msg.wParam;
+}
+
+bool IsCursorInRect(int x, int y, const Rect& rect)
+{
+    return (x >= rect.X && x <= rect.X + rect.Width &&
+        y >= rect.Y && y <= rect.Y + rect.Height);
+}
+
+void ShowContextMenu(HWND hWnd, POINT pt)
+{
+    HMENU hMenu = CreatePopupMenu();
+    if (hMenu)
+    {
+        InsertMenuW(hMenu, 0, MF_BYPOSITION | MF_STRING, IDM_DROP, L"Drop");
+        TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_LEFTBUTTON,
+            pt.x, pt.y, 0, hWnd, NULL);
+        DestroyMenu(hMenu);
+    }
+}
+
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch (message)
+    {
+    case WM_MOUSEMOVE:
+    {
+        int x = GET_X_LPARAM(lParam);
+        int y = GET_Y_LPARAM(lParam);
+
+        // Проверяем наведение на топор (только если он не в инвентаре)
+        if (!toporState.isInInventory)
+        {
+            bool nowHovered = IsCursorInRect(x, y, toporState.originalPos);
+            if (nowHovered != toporState.isHovered)
+            {
+                toporState.isHovered = nowHovered;
+                InvalidateRect(hWnd, NULL, FALSE);
+            }
+        }
+
+        TRACKMOUSEEVENT tme;
+        tme.cbSize = sizeof(TRACKMOUSEEVENT);
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = hWnd;
+        TrackMouseEvent(&tme);
+        return 0;
+    }
+
+    case WM_MOUSELEAVE:
+        toporState.isHovered = false;
+        InvalidateRect(hWnd, NULL, FALSE);
+        return 0;
+
+    case WM_LBUTTONDOWN:
+    {
+        int x = GET_X_LPARAM(lParam);
+        int y = GET_Y_LPARAM(lParam);
+
+        // Подбираем топор (если он не в инвентаре)
+        if (!toporState.isInInventory && IsCursorInRect(x, y, toporState.originalPos))
+        {
+            toporState.isInInventory = true;
+            InvalidateRect(hWnd, NULL, FALSE);
+        }
+        return 0;
+    }
+
+    case WM_RBUTTONDOWN:
+    {
+        if (toporState.isInInventory)
+        {
+            int x = GET_X_LPARAM(lParam);
+            int y = GET_Y_LPARAM(lParam);
+
+            // Проверяем, что клик был по топору в инвентаре
+            Rect toporInInventory(
+                toporState.inventoryPos.X + (toporState.inventoryPos.Width - 70) / 2,
+                toporState.inventoryPos.Y + (toporState.inventoryPos.Height - 70) / 2,
+                70, 70);
+
+            if (IsCursorInRect(x, y, toporInInventory))
+            {
+                POINT pt = { x, y };
+                ClientToScreen(hWnd, &pt);
+                ShowContextMenu(hWnd, pt);
+            }
+        }
+        return 0;
+    }
+
+    case WM_COMMAND:
+    {
+        if (LOWORD(wParam) == IDM_DROP)
+        {
+            toporState.isInInventory = false;
+            InvalidateRect(hWnd, NULL, FALSE);
+        }
+        return 0;
+    }
+
+    case WM_PAINT:
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        Graphics graphics(hdc);
+
+        // 1. Рисуем фон
+        Image background(L"C:/Users/student-3/Downloads/les.jpg");
+        if (background.GetLastStatus() == Ok)
+        {
+            graphics.DrawImage(&background, 0, 0);
+        }
+
+        // 2. Если топор в инвентаре, рисуем фон инвентаря
+        if (toporState.isInInventory)
+        {
+            Image inventoryBg(L"C:/Users/student-3/Downloads/inventory.png");
+            if (inventoryBg.GetLastStatus() == Ok)
+            {
+                graphics.DrawImage(&inventoryBg, toporState.inventoryPos);
+            }
+        }
+
+        // 3. Рисуем топор
+        const WCHAR* toporPath = toporState.isHovered
+            ? L"C:/Users/student-3/Downloads/topor-svet.png"
+            : L"C:/Users/student-3/Downloads/topor.png";
+
+        Image toporImage(toporPath);
+        if (toporImage.GetLastStatus() == Ok)
+        {
+            graphics.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+
+            if (toporState.isInInventory)
+            {
+                // Топор в инвентаре (по центру фона)
+                Rect toporInInventory(
+                    toporState.inventoryPos.X + (toporState.inventoryPos.Width - 70) / 2,
+                    toporState.inventoryPos.Y + (toporState.inventoryPos.Height - 70) / 2,
+                    70, 70);
+                graphics.DrawImage(&toporImage, toporInInventory);
+            }
+            else
+            {
+                // Топор на локации - всегда в originalPos
+                graphics.DrawImage(&toporImage, toporState.originalPos);
+            }
+        }
+
+        EndPaint(hWnd, &ps);
+    }
+    break;
+
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        break;
+
+    default:
+        return DefWindowProc(hWnd, message, wParam, lParam);
+    }
+    return 0;
+}
